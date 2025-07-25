@@ -1,0 +1,212 @@
+# Flyte Binary Helm Chart Values
+# This configuration is for deploying Flyte on AWS EKS with external PostgreSQL and S3
+
+configuration:
+  # Database configuration (PostgreSQL RDS)
+  database:
+    username: "${DB_USERNAME}"
+    passwordPath: "/etc/db-secret/password"  # From Kubernetes secret
+    host: "${DB_HOST}"
+    port: ${DB_PORT}
+    dbname: "${DB_NAME}"
+    options: "sslmode=require"
+    
+  # Storage configuration (S3)
+  storage:
+    metadataContainer: "${METADATA_BUCKET}"
+    userDataContainer: "${USERDATA_BUCKET}"
+    provider: s3
+    providerConfig:
+      s3:
+        region: "${AWS_REGION}"
+        authType: "iam"  # Use IAM roles (IRSA)
+        disableSSL: false
+        v2Signing: false
+        
+  # CloudWatch logging configuration
+  logging:
+    level: 5  # INFO level
+    plugins:
+      cloudwatch:
+        enabled: true
+        templateUri: |-
+          https://console.aws.amazon.com/cloudwatch/home?region=${AWS_REGION}#logEventViewer:group=/aws/eks/${CLUSTER_NAME}/cluster;stream=var.log.containers.{{ .podName }}_{{ .namespace }}_{{ .containerName }}-{{ .containerId }}.log
+
+  # Authentication (disabled for now, ready for OAuth)
+  auth:
+    enabled: false
+    # Future OAuth configuration will go here
+    # oidc:
+    #   baseUrl: "https://flyte.your-company.com"
+    #   scopes:
+    #     - "openid"
+    #     - "profile"
+    #     - "email"
+    #   clientId: "${IDA_CLIENT_ID}"
+
+  # Inline configuration for cluster resources
+  inline:
+    # Cluster resource configuration
+    cluster_resources:
+      customData:
+      - production:
+        - defaultIamRole:
+            value: "${FLYTE_USER_ROLE_ARN}"
+        - projectQuotaCpu:
+            value: "1000"
+        - projectQuotaMemory:
+            value: "5000Mi"
+      - staging:
+        - defaultIamRole:
+            value: "${FLYTE_USER_ROLE_ARN}"
+        - projectQuotaCpu:
+            value: "1000"
+        - projectQuotaMemory:
+            value: "5000Mi"
+      - development:
+        - defaultIamRole:
+            value: "${FLYTE_USER_ROLE_ARN}"
+        - projectQuotaCpu:
+            value: "1000"
+        - projectQuotaMemory:
+            value: "5000Mi"
+            
+    # FlyteAdmin configuration
+    flyteadmin:
+      roleNameKey: "iam.amazonaws.com/role"
+      
+    # Plugin configuration
+    plugins:
+      k8s:
+        inject-finalizer: true
+        default-env-vars:
+          - AWS_METADATA_SERVICE_TIMEOUT: 5
+          - AWS_METADATA_SERVICE_NUM_ATTEMPTS: 20
+          - AWS_DEFAULT_REGION: "${AWS_REGION}"
+        default-pod-template:
+          - container:
+              resources:
+                limits:
+                  cpu: "2"
+                  memory: "4Gi"
+                requests:
+                  cpu: "500m"
+                  memory: "1Gi"
+
+# Cluster resource templates for namespace/service account creation
+clusterResourceTemplates:
+  inline:
+    001_namespace.yaml: |
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: '{{ namespace }}'
+        labels:
+          flyte.org/domain: '{{ domain }}'
+          flyte.org/project: '{{ project }}'
+        
+    002_serviceaccount.yaml: |
+      apiVersion: v1
+      kind: ServiceAccount
+      metadata:
+        name: default
+        namespace: '{{ namespace }}'
+        annotations:
+          eks.amazonaws.com/role-arn: '{{ defaultIamRole }}'
+      automountServiceAccountToken: false
+      
+    003_resourcequota.yaml: |
+      apiVersion: v1
+      kind: ResourceQuota
+      metadata:
+        name: project-quota
+        namespace: '{{ namespace }}'
+      spec:
+        hard:
+          limits.cpu: '{{ projectQuotaCpu }}'
+          limits.memory: '{{ projectQuotaMemory }}'
+
+# Service account with IRSA for Flyte backend
+serviceAccount:
+  create: true
+  annotations:
+    eks.amazonaws.com/role-arn: "${FLYTE_BACKEND_ROLE_ARN}"
+
+# Volume mounts for secrets
+extraVolumeMounts:
+  - name: db-secret
+    mountPath: /etc/db-secret
+    readOnly: true
+
+extraVolumes:
+  - name: db-secret
+    secret:
+      secretName: flyte-db-secret
+
+# Ingress configuration using AWS ALB
+ingress:
+  create: true
+  ingressClassName: alb
+  commonAnnotations:
+    alb.ingress.kubernetes.io/group.name: flyte
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/ssl-redirect: '443'
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/healthcheck-path: /healthcheck
+    alb.ingress.kubernetes.io/healthcheck-interval-seconds: '15'
+    alb.ingress.kubernetes.io/healthcheck-timeout-seconds: '5'
+    alb.ingress.kubernetes.io/success-codes: '200'
+    alb.ingress.kubernetes.io/healthy-threshold-count: '2'
+    alb.ingress.kubernetes.io/unhealthy-threshold-count: '2'
+  httpAnnotations:
+    alb.ingress.kubernetes.io/actions.app-root: '{"Type": "redirect", "RedirectConfig": {"Path": "/console", "StatusCode": "HTTP_302"}}'
+  grpcAnnotations:
+    alb.ingress.kubernetes.io/backend-protocol-version: GRPC
+  # Uncomment and set your domain when ready
+  # host: "${FLYTE_DOMAIN}"
+
+# Resource limits and requests
+resources:
+  limits:
+    cpu: "${FLYTE_BACKEND_CPU_LIMIT}"
+    memory: "${FLYTE_BACKEND_MEMORY_LIMIT}"
+  requests:
+    cpu: "${FLYTE_BACKEND_CPU_REQUEST}"
+    memory: "${FLYTE_BACKEND_MEMORY_REQUEST}"
+
+# Pod disruption budget
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+# Node selector for worker node placement
+nodeSelector:
+  kubernetes.io/os: linux
+
+# Tolerations (if needed for dedicated nodes)
+tolerations: []
+
+# Affinity rules
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+    - weight: 100
+      podAffinityTerm:
+        labelSelector:
+          matchExpressions:
+          - key: app.kubernetes.io/name
+            operator: In
+            values:
+            - flyte-binary
+        topologyKey: kubernetes.io/hostname
+
+# Additional environment variables
+env:
+  - name: AWS_DEFAULT_REGION
+    value: "${AWS_REGION}"
+  - name: AWS_REGION
+    value: "${AWS_REGION}"
+
+# Monitoring and observability
+deployRedis: false  # Use external Redis if needed

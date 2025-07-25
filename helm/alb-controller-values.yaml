@@ -1,0 +1,132 @@
+# AWS Load Balancer Controller Helm Values
+# This configures the AWS Load Balancer Controller for ALB/NLB management
+
+# Cluster configuration
+clusterName: "${CLUSTER_NAME}"
+region: "${AWS_REGION}"
+
+# Service account configuration with IRSA
+serviceAccount:
+  create: true
+  name: aws-load-balancer-controller
+  annotations:
+    eks.amazonaws.com/role-arn: "${ALB_CONTROLLER_ROLE_ARN}"
+
+# Deployment configuration
+replicaCount: 2
+
+# Image configuration
+image:
+  repository: public.ecr.aws/eks/aws-load-balancer-controller
+  tag: "v2.6.2"  # Use latest stable version
+  pullPolicy: IfNotPresent
+
+# Resource limits and requests
+resources:
+  limits:
+    cpu: 200m
+    memory: 500Mi
+  requests:
+    cpu: 100m
+    memory: 200Mi
+
+# Pod disruption budget
+podDisruptionBudget:
+  enabled: true
+  maxUnavailable: 1
+
+# Node selector
+nodeSelector:
+  kubernetes.io/os: linux
+
+# Security context
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  capabilities:
+    drop:
+    - ALL
+
+# Pod security context
+podSecurityContext:
+  fsGroup: 65534
+  runAsNonRoot: true
+  runAsUser: 65534
+
+# Webhook configuration
+webhookTLS:
+  caCert: ""
+  cert: ""
+  key: ""
+
+# Controller configuration
+enableServiceMutatorWebhook: true
+enablePodReadinessGateInjection: false
+enableShield: false
+enableWAF: false
+enableWAFv2: false
+
+# VPC configuration (optional)
+vpcId: "${VPC_ID}"
+
+# AWS API throttling
+awsApiThrottle:
+  qps: 10
+  burst: 30
+
+# Logging configuration
+logLevel: info
+
+# Metrics configuration
+metrics:
+  serviceMonitor:
+    enabled: false
+    namespace: "monitoring"
+    interval: 60s
+
+# Webhook configuration
+webhook:
+  service:
+    type: ClusterIP
+    port: 9443
+    targetPort: 9443
+
+# Additional environment variables
+env:
+  AWS_DEFAULT_REGION: "${AWS_REGION}"
+  AWS_REGION: "${AWS_REGION}"
+
+# Pod annotations
+podAnnotations:
+  cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
+
+# Service annotations
+serviceAnnotations: {}
+
+# Additional labels
+additionalLabels: {}
+
+# Tolerations (if needed for dedicated nodes)
+tolerations: []
+
+# Affinity rules
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+    - weight: 100
+      podAffinityTerm:
+        labelSelector:
+          matchExpressions:
+          - key: app.kubernetes.io/name
+            operator: In
+            values:
+            - aws-load-balancer-controller
+        topologyKey: kubernetes.io/hostname
+
+# RBAC configuration
+rbac:
+  create: true
+
+# Priority class
+priorityClassName: system-cluster-critical
