@@ -24,7 +24,7 @@ print_error() {
 }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+PROJECT_ROOT="$(dirname "$(dirname "$SCRIPT_DIR")")"
 ENV_FILE="$PROJECT_ROOT/config/environment.env"
 
 # Source the environment file to get variables
